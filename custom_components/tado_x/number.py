@@ -122,8 +122,6 @@ class TadoXHeatPumpDhwTemperature(CoordinatorEntity[TadoXDataUpdateCoordinator],
     _attr_icon = "mdi:water-boiler"
     _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
     _attr_mode = NumberMode.BOX
-    _attr_native_min_value = float(DHW_MIN_TEMP)
-    _attr_native_max_value = float(DHW_MAX_TEMP)
     _attr_native_step = 1.0
 
     def __init__(self, coordinator: TadoXDataUpdateCoordinator) -> None:
@@ -141,6 +139,22 @@ class TadoXHeatPumpDhwTemperature(CoordinatorEntity[TadoXDataUpdateCoordinator],
             manufacturer="Tado",
             model="Tado X Home",
         )
+
+    @property
+    def native_min_value(self) -> float:
+        """Return the minimum allowed by the heat pump (API constraints)."""
+        data = self.coordinator.data
+        if data and data.dhw_min is not None:
+            return float(data.dhw_min)
+        return float(DHW_MIN_TEMP)
+
+    @property
+    def native_max_value(self) -> float:
+        """Return the maximum allowed by the heat pump (API constraints)."""
+        data = self.coordinator.data
+        if data and data.dhw_max is not None:
+            return float(data.dhw_max)
+        return float(DHW_MAX_TEMP)
 
     @property
     def native_value(self) -> float | None:

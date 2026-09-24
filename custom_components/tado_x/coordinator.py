@@ -133,6 +133,8 @@ class TadoXData:
     # Heat pump domestic hot water (heat pump optimizer only)
     has_heat_pump_dhw: bool = False
     dhw_target_temperature: float | None = None
+    dhw_min: float | None = None
+    dhw_max: float | None = None
     dhw_raw: dict[str, Any] = field(default_factory=dict)
 
 
@@ -253,6 +255,13 @@ class TadoXDataUpdateCoordinator(DataUpdateCoordinator[TadoXData]):
             data.has_heat_pump_dhw = True
             data.dhw_raw = self._dhw_cache
             data.dhw_target_temperature = self._parse_dhw_target(self._dhw_cache)
+            # Allowed range, e.g. capabilities.schedule.targetSetpointValue = {min: 40, max: 65}
+            limits = (
+                ((self._dhw_cache.get("capabilities") or {}).get("schedule") or {})
+                .get("targetSetpointValue") or {}
+            )
+            data.dhw_min = limits.get("min")
+            data.dhw_max = limits.get("max")
 
     async def _async_update_data(self) -> TadoXData:
         """Fetch data from Tado X API."""
