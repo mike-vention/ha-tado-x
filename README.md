@@ -1,5 +1,12 @@
 # Tado X Integration for Home Assistant
 
+> **Fork note (mike-vention/ha-tado-x):** adds heat pump optimizer support on top of upstream 1.8.11:
+> `number` for the DHW target temperature, `tado_x.set_climate_manual` (room override that does not expire
+> after 30 minutes), and heat pump sensors: DHW tank temperature, active DHW/heating setpoints and schedule
+> mode, heating target/eco temperatures, tank fully loaded, DHW manual off, connection (raw API data in
+> attributes). Heat pump endpoints are polled every 10 minutes to protect the API quota.
+
+
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 [![GitHub Release](https://img.shields.io/github/v/release/exabird/ha-tado-x)](https://github.com/exabird/ha-tado-x/releases)
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Support-yellow?style=flat&logo=buy-me-a-coffee)](https://buymeacoffee.com/exabird)

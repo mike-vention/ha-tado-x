@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
@@ -11,12 +12,14 @@ from homeassistant.components.binary_sensor import (
     BinarySensorEntityDescription,
 )
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
+from .heat_pump import get_path
 from .coordinator import TadoXDataUpdateCoordinator, TadoXDevice, TadoXRoom
 
 _LOGGER = logging.getLogger(__name__)
@@ -95,6 +98,11 @@ async def async_setup_entry(
             if description.key == "battery_low" and not device.battery_state:
                 continue
             entities.append(TadoXDeviceBinarySensor(coordinator, device.serial_number, description))
+
+    # Add heat pump optimizer binary sensors (only if /heatPump answers)
+    if coordinator.data.has_heat_pump:
+        for description in HEAT_PUMP_BINARY_SENSORS:
+            entities.append(TadoXHeatPumpBinarySensor(coordinator, description))
 
     async_add_entities(entities)
 
@@ -250,3 +258,73 @@ class TadoXDeviceBinarySensor(CoordinatorEntity[TadoXDataUpdateCoordinator], Bin
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
         self.async_write_ha_state()
+
+
+@dataclass(frozen=True, kw_only=True)
+class TadoXHeatPumpBinarySensorEntityDescription(BinarySensorEntityDescription):
+    """Describes a Tado X heat pump binary sensor entity."""
+
+    path: str
+    on_value: Any = True
+
+
+HEAT_PUMP_BINARY_SENSORS: tuple[TadoXHeatPumpBinarySensorEntityDescription, ...] = (
+    TadoXHeatPumpBinarySensorEntityDescription(
+        key="heat_pump_dhw_tank_fully_loaded",
+        name="Heat pump hot water tank fully loaded",
+        icon="mdi:water-boiler-auto",
+        path="domesticHotWater.tankIsFullyLoaded",
+    ),
+    TadoXHeatPumpBinarySensorEntityDescription(
+        key="heat_pump_dhw_manual_off",
+        name="Heat pump hot water manual off",
+        icon="mdi:water-boiler-off",
+        path="domesticHotWater.manualOffActive",
+    ),
+    TadoXHeatPumpBinarySensorEntityDescription(
+        key="heat_pump_connected",
+        name="Heat pump connected",
+        device_class=BinarySensorDeviceClass.CONNECTIVITY,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        path="connection.state",
+        on_value="CONNECTED",
+    ),
+)
+
+
+class TadoXHeatPumpBinarySensor(CoordinatorEntity[TadoXDataUpdateCoordinator], BinarySensorEntity):
+    """Tado X heat pump optimizer binary sensor (home device)."""
+
+    _attr_has_entity_name = True
+    entity_description: TadoXHeatPumpBinarySensorEntityDescription
+
+    def __init__(
+        self,
+        coordinator: TadoXDataUpdateCoordinator,
+        description: TadoXHeatPumpBinarySensorEntityDescription,
+    ) -> None:
+        """Initialize heat pump binary sensor."""
+        super().__init__(coordinator)
+        self.entity_description = description
+        self._attr_unique_id = f"{coordinator.home_id}_{description.key}"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return device info for the home."""
+        return DeviceInfo(identifiers={(DOMAIN, str(self.coordinator.home_id))})
+
+    @property
+    def available(self) -> bool:
+        """Return True while /heatPump answers and carries the field."""
+        data = self.coordinator.data
+        return (
+            data is not None
+            and data.has_heat_pump
+            and get_path(data.heat_pump_raw, self.entity_description.path) is not None
+        )
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return True if the field equals the 'on' value."""
+        value = get_path(self.coordinator.data.heat_pump_raw, self.entity_description.path)
+        return None if value is None else value == self.entity_description.on_value

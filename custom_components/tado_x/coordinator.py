@@ -136,6 +136,10 @@ class TadoXData:
     dhw_min: float | None = None
     dhw_max: float | None = None
     dhw_raw: dict[str, Any] = field(default_factory=dict)
+    # Heat pump status (/heatPump) and space heating (/heatPump/heating), raw API responses
+    has_heat_pump: bool = False
+    heat_pump_raw: dict[str, Any] = field(default_factory=dict)
+    heat_pump_heating_raw: dict[str, Any] = field(default_factory=dict)
 
 
 class TadoXDataUpdateCoordinator(DataUpdateCoordinator[TadoXData]):
@@ -186,6 +190,8 @@ class TadoXDataUpdateCoordinator(DataUpdateCoordinator[TadoXData]):
         # Heat pump DHW is polled less often than rooms to protect the API quota
         self._dhw_last_fetch: datetime | None = None
         self._dhw_cache: dict[str, Any] | None = None
+        self._heat_pump_cache: dict[str, Any] | None = None
+        self._heat_pump_heating_cache: dict[str, Any] | None = None
 
         _LOGGER.info(
             "Tado X coordinator initialized with %d second update interval (%s tier)",
@@ -232,8 +238,20 @@ class TadoXDataUpdateCoordinator(DataUpdateCoordinator[TadoXData]):
         except (TypeError, ValueError):
             return None
 
+    async def _async_fetch_optional(self, fetch: Callable[[], Any], what: str) -> dict[str, Any] | None:
+        """Call a heat pump endpoint that only exists with a heat pump optimizer."""
+        try:
+            result = await fetch()
+            _LOGGER.debug("Heat pump %s: %s", what, result)
+            return result or None
+        except (TadoXRateLimitError, TadoXAuthError):
+            raise
+        except Exception as err:
+            _LOGGER.debug("Heat pump %s not available: %s", what, err)
+            return None
+
     async def _async_update_heat_pump_dhw(self, data: TadoXData) -> None:
-        """Fill heat pump DHW data, calling the API at most every DHW_REFRESH_INTERVAL."""
+        """Fill heat pump data, calling the API at most every DHW_REFRESH_INTERVAL."""
         now = datetime.now()
         due = (
             self._dhw_last_fetch is None
@@ -241,15 +259,21 @@ class TadoXDataUpdateCoordinator(DataUpdateCoordinator[TadoXData]):
         )
         if due:
             self._dhw_last_fetch = now
-            try:
-                self._dhw_cache = await self.api.get_heat_pump_dhw()
-                _LOGGER.debug("Heat pump DHW: %s", self._dhw_cache)
-            except (TadoXRateLimitError, TadoXAuthError):
-                raise
-            except Exception as err:
-                # Endpoint only exists for homes with a heat pump optimizer
-                _LOGGER.debug("Heat pump DHW not available: %s", err)
-                self._dhw_cache = None
+            self._dhw_cache = await self._async_fetch_optional(
+                self.api.get_heat_pump_dhw, "DHW"
+            )
+            self._heat_pump_cache = await self._async_fetch_optional(
+                self.api.get_heat_pump, "status"
+            )
+            self._heat_pump_heating_cache = await self._async_fetch_optional(
+                self.api.get_heat_pump_heating, "heating"
+            )
+
+        if self._heat_pump_cache:
+            data.has_heat_pump = True
+            data.heat_pump_raw = self._heat_pump_cache
+        if self._heat_pump_heating_cache:
+            data.heat_pump_heating_raw = self._heat_pump_heating_cache
 
         if self._dhw_cache:
             data.has_heat_pump_dhw = True

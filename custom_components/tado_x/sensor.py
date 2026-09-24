@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -13,11 +14,14 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import PERCENTAGE, UnitOfTemperature, UnitOfTime
+from homeassistant.const import EntityCategory, PERCENTAGE, UnitOfTemperature, UnitOfTime
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
+
+from . import heat_pump as hp
 
 from .const import API_QUOTA_FREE_TIER, API_QUOTA_PREMIUM, DOMAIN
 from .coordinator import (
@@ -360,6 +364,11 @@ async def async_setup_entry(
             for description in AIR_COMFORT_SENSORS:
                 entities.append(TadoXAirComfortSensor(coordinator, room_id, description))
 
+    # Add heat pump optimizer sensors (only if the heat pump endpoints answer)
+    if coordinator.data.has_heat_pump or coordinator.data.has_heat_pump_dhw:
+        for description in HEAT_PUMP_SENSORS:
+            entities.append(TadoXHeatPumpSensor(coordinator, description))
+
     async_add_entities(entities)
 
 
@@ -644,3 +653,161 @@ class TadoXAirComfortSensor(CoordinatorEntity[TadoXDataUpdateCoordinator], Senso
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
         self.async_write_ha_state()
+
+
+# Heat pump optimizer sensors (home device). Values come from the raw API
+# responses kept by the coordinator, so unknown/missing fields read as None.
+@dataclass(frozen=True, kw_only=True)
+class TadoXHeatPumpSensorEntityDescription(SensorEntityDescription):
+    """Describes a Tado X heat pump sensor entity."""
+
+    value_fn: Callable[[TadoXData, datetime], Any]
+    attrs_fn: Callable[[TadoXData, datetime], dict[str, Any]] | None = None
+
+
+def _dhw_schedule(data: TadoXData) -> dict[str, Any] | None:
+    return hp.get_path(data.dhw_raw, "schedule")
+
+
+def _heating_schedule(data: TadoXData) -> dict[str, Any] | None:
+    return hp.get_path(data.heat_pump_heating_raw, "schedule")
+
+
+def _schedule_attrs(schedule_fn: Callable[[TadoXData], dict[str, Any] | None]):
+    def attrs(data: TadoXData, now: datetime) -> dict[str, Any]:
+        return {"next_change": hp.next_change(schedule_fn(data), now)}
+    return attrs
+
+
+def _raw_attrs(data: TadoXData, now: datetime) -> dict[str, Any]:
+    return {
+        "status": data.heat_pump_raw,
+        "heating": {
+            k: v for k, v in data.heat_pump_heating_raw.items() if k != "schedule"
+        },
+        "heating_schedule": _heating_schedule(data),
+    }
+
+
+_TEMP = {
+    "device_class": SensorDeviceClass.TEMPERATURE,
+    "native_unit_of_measurement": UnitOfTemperature.CELSIUS,
+    "state_class": SensorStateClass.MEASUREMENT,
+}
+
+HEAT_PUMP_SENSORS: tuple[TadoXHeatPumpSensorEntityDescription, ...] = (
+    TadoXHeatPumpSensorEntityDescription(
+        key="heat_pump_dhw_temperature",
+        name="Heat pump hot water temperature",
+        icon="mdi:water-boiler",
+        value_fn=lambda d, now: hp.to_float(
+            hp.get_path(d.heat_pump_raw, "domesticHotWater.currentTemperatureInCelsius")
+        ),
+        **_TEMP,
+    ),
+    TadoXHeatPumpSensorEntityDescription(
+        key="heat_pump_dhw_active_setpoint",
+        name="Heat pump hot water active setpoint",
+        icon="mdi:water-thermometer",
+        value_fn=lambda d, now: hp.active_setpoint(_dhw_schedule(d), now),
+        attrs_fn=_schedule_attrs(_dhw_schedule),
+        **_TEMP,
+    ),
+    TadoXHeatPumpSensorEntityDescription(
+        key="heat_pump_dhw_eco_temperature",
+        name="Heat pump hot water eco temperature",
+        icon="mdi:water-thermometer-outline",
+        value_fn=lambda d, now: hp.to_float(
+            hp.get_path(d.dhw_raw, "schedule.fallbackSetpointValue")
+        ),
+        **_TEMP,
+    ),
+    TadoXHeatPumpSensorEntityDescription(
+        key="heat_pump_dhw_schedule_mode",
+        name="Heat pump hot water schedule mode",
+        icon="mdi:calendar-clock",
+        value_fn=lambda d, now: hp.active_setpoint_type(_dhw_schedule(d), now),
+        attrs_fn=_schedule_attrs(_dhw_schedule),
+    ),
+    TadoXHeatPumpSensorEntityDescription(
+        key="heat_pump_heating_target_temperature",
+        name="Heat pump heating target temperature",
+        icon="mdi:radiator",
+        value_fn=lambda d, now: hp.to_float(
+            hp.get_path(d.heat_pump_heating_raw, "schedule.targetSetpointValue")
+        ),
+        **_TEMP,
+    ),
+    TadoXHeatPumpSensorEntityDescription(
+        key="heat_pump_heating_eco_temperature",
+        name="Heat pump heating eco temperature",
+        icon="mdi:radiator-disabled",
+        value_fn=lambda d, now: hp.to_float(
+            hp.get_path(d.heat_pump_heating_raw, "schedule.fallbackSetpointValue")
+        ),
+        **_TEMP,
+    ),
+    TadoXHeatPumpSensorEntityDescription(
+        key="heat_pump_heating_active_setpoint",
+        name="Heat pump heating active setpoint",
+        icon="mdi:thermometer-chevron-up",
+        value_fn=lambda d, now: hp.active_setpoint(_heating_schedule(d), now),
+        attrs_fn=_schedule_attrs(_heating_schedule),
+        **_TEMP,
+    ),
+    TadoXHeatPumpSensorEntityDescription(
+        key="heat_pump_heating_schedule_mode",
+        name="Heat pump heating schedule mode",
+        icon="mdi:calendar-clock",
+        value_fn=lambda d, now: hp.active_setpoint_type(_heating_schedule(d), now),
+        attrs_fn=_schedule_attrs(_heating_schedule),
+    ),
+    TadoXHeatPumpSensorEntityDescription(
+        key="heat_pump_connection",
+        name="Heat pump connection",
+        icon="mdi:heat-pump",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda d, now: hp.get_path(d.heat_pump_raw, "connection.state"),
+        attrs_fn=_raw_attrs,
+    ),
+)
+
+
+class TadoXHeatPumpSensor(CoordinatorEntity[TadoXDataUpdateCoordinator], SensorEntity):
+    """Tado X heat pump optimizer sensor (home device)."""
+
+    _attr_has_entity_name = True
+    entity_description: TadoXHeatPumpSensorEntityDescription
+
+    def __init__(
+        self,
+        coordinator: TadoXDataUpdateCoordinator,
+        description: TadoXHeatPumpSensorEntityDescription,
+    ) -> None:
+        """Initialize heat pump sensor."""
+        super().__init__(coordinator)
+        self.entity_description = description
+        self._attr_unique_id = f"{coordinator.home_id}_{description.key}"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return device info for the home."""
+        return DeviceInfo(identifiers={(DOMAIN, str(self.coordinator.home_id))})
+
+    @property
+    def available(self) -> bool:
+        """Return True while the heat pump endpoints answer."""
+        data = self.coordinator.data
+        return data is not None and (data.has_heat_pump or data.has_heat_pump_dhw)
+
+    @property
+    def native_value(self) -> Any:
+        """Return the sensor value."""
+        return self.entity_description.value_fn(self.coordinator.data, dt_util.now())
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Return extra attributes."""
+        if not self.entity_description.attrs_fn:
+            return None
+        return self.entity_description.attrs_fn(self.coordinator.data, dt_util.now())

@@ -872,6 +872,28 @@ class TadoXApi:
         )
         return result if isinstance(result, dict) else {}
 
+    async def get_heat_pump(self) -> dict[str, Any]:
+        """Get heat pump status (connection, DHW tank temperature, availability)."""
+        if not self._home_id:
+            raise TadoXApiError("Home ID not set")
+
+        result = await self._request(
+            "GET",
+            f"{TADO_HOPS_API_URL}/homes/{self._home_id}/heatPump",
+        )
+        return result if isinstance(result, dict) else {}
+
+    async def get_heat_pump_heating(self) -> dict[str, Any]:
+        """Get heat pump space heating state and schedule."""
+        if not self._home_id:
+            raise TadoXApiError("Home ID not set")
+
+        result = await self._request(
+            "GET",
+            f"{TADO_HOPS_API_URL}/homes/{self._home_id}/heatPump/heating",
+        )
+        return result if isinstance(result, dict) else {}
+
     async def set_heat_pump_dhw_temperature(self, temperature: int) -> None:
         """Set the heat pump DHW target temperature.
 
