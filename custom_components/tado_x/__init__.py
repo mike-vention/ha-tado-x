@@ -56,6 +56,8 @@ ATTR_ENTITY_ID: Final = "entity_id"
 ATTR_TEMPERATURE: Final = "temperature"
 ATTR_DURATION: Final = "duration"
 
+SERVICE_SET_CLIMATE_MANUAL: Final = "set_climate_manual"
+
 # Service schemas
 SERVICE_SET_TEMPERATURE_OFFSET_SCHEMA = vol.Schema(
     {
@@ -96,6 +98,52 @@ SERVICE_SET_CLIMATE_TIMER_SCHEMA = vol.Schema(
         ),
     }
 )
+
+SERVICE_SET_CLIMATE_MANUAL_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_ENTITY_ID): cv.entity_id,
+        vol.Required(ATTR_TEMPERATURE): vol.All(
+            vol.Coerce(float),
+            vol.Range(min=5.0, max=30.0),
+        ),
+    }
+)
+
+
+def _room_id_from_entity(hass: HomeAssistant, entity_id: str, service: str) -> int:
+    """Resolve the Tado X room_id behind a climate entity."""
+    from homeassistant.helpers import entity_registry as er
+    entity_registry = er.async_get(hass)
+    entity_entry = entity_registry.async_get(entity_id)
+
+    if not entity_entry:
+        raise HomeAssistantError(f"Entity {entity_id} not found in registry")
+
+    # Verify this is a Tado X entity
+    if entity_entry.platform != DOMAIN:
+        raise HomeAssistantError(
+            f"Entity {entity_id} is not a Tado X entity (platform: {entity_entry.platform}). "
+            f"The {service} service only works with native Tado X climate entities."
+        )
+
+    if not entity_entry.unique_id:
+        raise HomeAssistantError(f"Entity {entity_id} has no unique_id")
+
+    # Extract room_id from unique_id
+    # The unique_id for Tado X climate entities is "{home_id}_{room_id}_climate"
+    try:
+        parts = entity_entry.unique_id.split("_")
+        if len(parts) == 3 and parts[2] == "climate":
+            # Format: "12345_67_climate" where 12345 is home_id and 67 is room_id
+            return int(parts[1])
+        if len(parts) == 2:
+            # Legacy format: "12345_67" (backward compatibility)
+            return int(parts[1])
+        raise ValueError(f"Unexpected unique_id format: {entity_entry.unique_id}")
+    except (ValueError, IndexError) as err:
+        raise HomeAssistantError(
+            f"Could not extract room_id from entity {entity_id}: {err}"
+        ) from err
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -331,40 +379,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         temperature = call.data[ATTR_TEMPERATURE]
         duration_minutes = call.data[ATTR_DURATION]
 
-        # Get the entity from registry
-        from homeassistant.helpers import entity_registry as er
-        entity_registry = er.async_get(hass)
-        entity_entry = entity_registry.async_get(entity_id)
-
-        if not entity_entry:
-            raise HomeAssistantError(f"Entity {entity_id} not found in registry")
-
-        # Verify this is a Tado X entity
-        if entity_entry.platform != DOMAIN:
-            raise HomeAssistantError(
-                f"Entity {entity_id} is not a Tado X entity (platform: {entity_entry.platform}). "
-                f"The set_climate_timer service only works with native Tado X climate entities."
-            )
-
-        if not entity_entry.unique_id:
-            raise HomeAssistantError(f"Entity {entity_id} has no unique_id")
-
-        # Extract room_id from unique_id
-        # The unique_id for Tado X climate entities is "{home_id}_{room_id}_climate"
-        try:
-            parts = entity_entry.unique_id.split("_")
-            if len(parts) == 3 and parts[2] == "climate":
-                # Format: "12345_67_climate" where 12345 is home_id and 67 is room_id
-                room_id = int(parts[1])
-            elif len(parts) == 2:
-                # Legacy format: "12345_67" (backward compatibility)
-                room_id = int(parts[1])
-            else:
-                raise ValueError(f"Unexpected unique_id format: {entity_entry.unique_id}")
-        except (ValueError, IndexError) as err:
-            raise HomeAssistantError(
-                f"Could not extract room_id from entity {entity_id}: {err}"
-            ) from err
+        room_id = _room_id_from_entity(hass, entity_id, SERVICE_SET_CLIMATE_TIMER)
 
         # Convert minutes to seconds
         duration_seconds = duration_minutes * 60
@@ -395,6 +410,34 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             SERVICE_SET_CLIMATE_TIMER,
             async_set_climate_timer,
             schema=SERVICE_SET_CLIMATE_TIMER_SCHEMA,
+        )
+
+    async def async_set_climate_manual(call: ServiceCall) -> None:
+        """Handle set_climate_manual service call (override until schedule is resumed)."""
+        entity_id = call.data[ATTR_ENTITY_ID]
+        temperature = call.data[ATTR_TEMPERATURE]
+        room_id = _room_id_from_entity(hass, entity_id, SERVICE_SET_CLIMATE_MANUAL)
+
+        try:
+            await coordinator.api.set_room_temperature(
+                room_id=room_id,
+                temperature=temperature,
+                power="ON",
+                termination_type="MANUAL",
+            )
+            await coordinator.async_request_refresh()
+            _LOGGER.info("Set %s to %.1f°C until schedule is resumed", entity_id, temperature)
+        except TadoXApiError as err:
+            _LOGGER.error("Failed to set manual climate: %s", err)
+            raise HomeAssistantError(f"Failed to set manual climate: {err}") from err
+
+    # Register manual climate service (only once per integration)
+    if not hass.services.has_service(DOMAIN, SERVICE_SET_CLIMATE_MANUAL):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_SET_CLIMATE_MANUAL,
+            async_set_climate_manual,
+            schema=SERVICE_SET_CLIMATE_MANUAL_SCHEMA,
         )
 
     # Create the "Home" device before loading platforms to ensure via_device references work

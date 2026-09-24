@@ -60,6 +60,13 @@ TERMINATION_MANUAL: Final = "MANUAL"
 TERMINATION_TIMER: Final = "TIMER"
 TERMINATION_NEXT_TIME_BLOCK: Final = "NEXT_TIME_BLOCK"
 
+# Heat pump DHW refresh interval (seconds) - polled less often than rooms to save API quota
+DHW_REFRESH_INTERVAL: Final = 600
+
+# Heat pump DHW target temperature limits (used when the API gives no constraints)
+DHW_MIN_TEMP: Final = 30
+DHW_MAX_TEMP: Final = 65
+
 # Default timer duration (30 minutes)
 DEFAULT_TIMER_DURATION: Final = 1800
 

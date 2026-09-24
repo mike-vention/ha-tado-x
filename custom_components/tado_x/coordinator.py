@@ -11,7 +11,12 @@ from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import TadoXApi, TadoXApiError, TadoXAuthError, TadoXRateLimitError
-from .const import DOMAIN, SCAN_INTERVAL_AUTO_ASSIST, SCAN_INTERVAL_FREE_TIER
+from .const import (
+    DHW_REFRESH_INTERVAL,
+    DOMAIN,
+    SCAN_INTERVAL_AUTO_ASSIST,
+    SCAN_INTERVAL_FREE_TIER,
+)
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
@@ -125,6 +130,10 @@ class TadoXData:
     flow_temp_auto_adaptation: bool = False
     flow_temp_auto_value: int | None = None
     has_flow_temp_control: bool = False
+    # Heat pump domestic hot water (heat pump optimizer only)
+    has_heat_pump_dhw: bool = False
+    dhw_target_temperature: float | None = None
+    dhw_raw: dict[str, Any] = field(default_factory=dict)
 
 
 class TadoXDataUpdateCoordinator(DataUpdateCoordinator[TadoXData]):
@@ -172,6 +181,10 @@ class TadoXDataUpdateCoordinator(DataUpdateCoordinator[TadoXData]):
         self.enable_running_times = enable_running_times
         self.enable_flow_temp = enable_flow_temp
 
+        # Heat pump DHW is polled less often than rooms to protect the API quota
+        self._dhw_last_fetch: datetime | None = None
+        self._dhw_cache: dict[str, Any] | None = None
+
         _LOGGER.info(
             "Tado X coordinator initialized with %d second update interval (%s tier)",
             scan_interval,
@@ -201,6 +214,45 @@ class TadoXDataUpdateCoordinator(DataUpdateCoordinator[TadoXData]):
         if self.enable_running_times:
             calls += 1
         return calls
+
+    def invalidate_dhw(self) -> None:
+        """Force the heat pump DHW state to be fetched on the next update."""
+        self._dhw_last_fetch = None
+
+    @staticmethod
+    def _parse_dhw_target(dhw: dict[str, Any]) -> float | None:
+        """Extract the DHW target temperature from the heat pump response."""
+        setpoint = (dhw.get("schedule") or {}).get("targetSetpointValue")
+        if isinstance(setpoint, dict):
+            setpoint = setpoint.get("value")
+        try:
+            return float(setpoint) if setpoint is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    async def _async_update_heat_pump_dhw(self, data: TadoXData) -> None:
+        """Fill heat pump DHW data, calling the API at most every DHW_REFRESH_INTERVAL."""
+        now = datetime.now()
+        due = (
+            self._dhw_last_fetch is None
+            or now - self._dhw_last_fetch >= timedelta(seconds=DHW_REFRESH_INTERVAL)
+        )
+        if due:
+            self._dhw_last_fetch = now
+            try:
+                self._dhw_cache = await self.api.get_heat_pump_dhw()
+                _LOGGER.debug("Heat pump DHW: %s", self._dhw_cache)
+            except (TadoXRateLimitError, TadoXAuthError):
+                raise
+            except Exception as err:
+                # Endpoint only exists for homes with a heat pump optimizer
+                _LOGGER.debug("Heat pump DHW not available: %s", err)
+                self._dhw_cache = None
+
+        if self._dhw_cache:
+            data.has_heat_pump_dhw = True
+            data.dhw_raw = self._dhw_cache
+            data.dhw_target_temperature = self._parse_dhw_target(self._dhw_cache)
 
     async def _async_update_data(self) -> TadoXData:
         """Fetch data from Tado X API."""
@@ -488,6 +540,9 @@ class TadoXDataUpdateCoordinator(DataUpdateCoordinator[TadoXData]):
                     # (requires OpenTherm-compatible boiler control device)
                     _LOGGER.debug("Flow temperature optimization not available: %s", err)
                     data.has_flow_temp_control = False
+
+            # Fetch heat pump DHW (throttled; forced after a setpoint change)
+            await self._async_update_heat_pump_dhw(data)
 
             # Populate API stats (prefer real values from headers when available)
             data.api_calls_today = self.api.api_calls_today

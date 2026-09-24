@@ -855,3 +855,47 @@ class TadoXApi:
             f"{TADO_HOPS_API_URL}/homes/{self._home_id}/settings/flowTemperatureOptimization",
             json_data={"autoAdaptation": {"enabled": enabled}},
         )
+
+    # Heat pump domestic hot water (Tado Heat Pump Optimizer X)
+    async def get_heat_pump_dhw(self) -> dict[str, Any]:
+        """Get heat pump domestic hot water state and schedule.
+
+        Only available with a heat pump optimizer. The response contains
+        a "schedule" object whose "targetSetpointValue" is the DHW target.
+        """
+        if not self._home_id:
+            raise TadoXApiError("Home ID not set")
+
+        result = await self._request(
+            "GET",
+            f"{TADO_HOPS_API_URL}/homes/{self._home_id}/heatPump/domesticHotWater",
+        )
+        return result if isinstance(result, dict) else {}
+
+    async def set_heat_pump_dhw_temperature(self, temperature: int) -> None:
+        """Set the heat pump DHW target temperature.
+
+        The heat pump API has no manual override for DHW temperature, so the
+        target is changed in the DHW schedule itself: fetch the current
+        schedule, replace targetSetpointValue and write it back.
+        """
+        if not self._home_id:
+            raise TadoXApiError("Home ID not set")
+
+        dhw = await self.get_heat_pump_dhw()
+        schedule = dhw.get("schedule")
+        if not isinstance(schedule, dict) or "targetSetpointValue" not in schedule:
+            raise TadoXApiError("Heat pump DHW schedule not available")
+
+        setpoint = schedule["targetSetpointValue"]
+        if isinstance(setpoint, dict):
+            # Keep the type the API used (the Tado app sends the value as a string)
+            setpoint["value"] = str(temperature) if isinstance(setpoint.get("value"), str) else temperature
+        else:
+            schedule["targetSetpointValue"] = temperature
+
+        await self._request(
+            "PUT",
+            f"{TADO_HOPS_API_URL}/homes/{self._home_id}/heatPump/domesticHotWater/schedule",
+            json_data=schedule,
+        )

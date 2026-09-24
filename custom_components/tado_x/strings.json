@@ -132,6 +132,20 @@
           "description": "Duration in minutes (1-1440)"
         }
       }
+    },
+    "set_climate_manual": {
+      "name": "Set climate manual",
+      "description": "Set a room temperature until the schedule is resumed (e.g. via HVAC mode auto).",
+      "fields": {
+        "entity_id": {
+          "name": "Climate entity",
+          "description": "The Tado X climate entity (room) to control"
+        },
+        "temperature": {
+          "name": "Temperature",
+          "description": "Target temperature in °C"
+        }
+      }
     }
   },
   "entity": {
@@ -282,6 +296,9 @@
     "number": {
       "max_flow_temperature": {
         "name": "Max Flow Temperature"
+      },
+      "dhw_temperature": {
+        "name": "Hot water temperature"
       }
     },
     "button": {

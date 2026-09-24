@@ -126,3 +126,28 @@ set_climate_timer:
           max: 1440
           step: 1
           unit_of_measurement: "min"
+
+set_climate_manual:
+  name: Set climate manual
+  description: Set a room temperature until the schedule is resumed (e.g. via HVAC mode auto). Unlike climate.set_temperature, the override does not expire after 30 minutes.
+  fields:
+    entity_id:
+      name: Climate entity
+      description: The Tado X climate entity (room) to control
+      required: true
+      example: "climate.living_room"
+      selector:
+        entity:
+          integration: tado_x
+          domain: climate
+    temperature:
+      name: Temperature
+      description: Target temperature in °C
+      required: true
+      example: 20.0
+      selector:
+        number:
+          min: 5.0
+          max: 30.0
+          step: 0.5
+          unit_of_measurement: "°C"
