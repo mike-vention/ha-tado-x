@@ -679,6 +679,12 @@ def _schedule_attrs(schedule_fn: Callable[[TadoXData], dict[str, Any] | None]):
     return attrs
 
 
+def _current_block_value(data: TadoXData, section: str) -> float | None:
+    return hp.to_float(
+        hp.get_path(data.heat_pump_raw, f"{section}.currentBlockSetpoint.setpointValue")
+    )
+
+
 def _raw_attrs(data: TadoXData, now: datetime) -> dict[str, Any]:
     return {
         "status": data.heat_pump_raw,
@@ -709,7 +715,8 @@ HEAT_PUMP_SENSORS: tuple[TadoXHeatPumpSensorEntityDescription, ...] = (
         key="heat_pump_dhw_active_setpoint",
         name="Heat pump hot water active setpoint",
         icon="mdi:water-thermometer",
-        value_fn=lambda d, now: hp.active_setpoint(_dhw_schedule(d), now),
+        value_fn=lambda d, now: _current_block_value(d, "domesticHotWater")
+        or hp.active_setpoint(_dhw_schedule(d), now),
         attrs_fn=_schedule_attrs(_dhw_schedule),
         **_TEMP,
     ),
@@ -726,32 +733,16 @@ HEAT_PUMP_SENSORS: tuple[TadoXHeatPumpSensorEntityDescription, ...] = (
         key="heat_pump_dhw_schedule_mode",
         name="Heat pump hot water schedule mode",
         icon="mdi:calendar-clock",
-        value_fn=lambda d, now: hp.active_setpoint_type(_dhw_schedule(d), now),
+        value_fn=lambda d, now: hp.get_path(d.heat_pump_raw, "domesticHotWater.currentBlockSetpoint.setpointType")
+        or hp.active_setpoint_type(_dhw_schedule(d), now),
         attrs_fn=_schedule_attrs(_dhw_schedule),
-    ),
-    TadoXHeatPumpSensorEntityDescription(
-        key="heat_pump_heating_target_temperature",
-        name="Heat pump heating target temperature",
-        icon="mdi:radiator",
-        value_fn=lambda d, now: hp.to_float(
-            hp.get_path(d.heat_pump_heating_raw, "schedule.targetSetpointValue")
-        ),
-        **_TEMP,
-    ),
-    TadoXHeatPumpSensorEntityDescription(
-        key="heat_pump_heating_eco_temperature",
-        name="Heat pump heating eco temperature",
-        icon="mdi:radiator-disabled",
-        value_fn=lambda d, now: hp.to_float(
-            hp.get_path(d.heat_pump_heating_raw, "schedule.fallbackSetpointValue")
-        ),
-        **_TEMP,
     ),
     TadoXHeatPumpSensorEntityDescription(
         key="heat_pump_heating_active_setpoint",
         name="Heat pump heating active setpoint",
         icon="mdi:thermometer-chevron-up",
-        value_fn=lambda d, now: hp.active_setpoint(_heating_schedule(d), now),
+        value_fn=lambda d, now: _current_block_value(d, "heating")
+        or hp.active_setpoint(_heating_schedule(d), now),
         attrs_fn=_schedule_attrs(_heating_schedule),
         **_TEMP,
     ),
@@ -759,8 +750,56 @@ HEAT_PUMP_SENSORS: tuple[TadoXHeatPumpSensorEntityDescription, ...] = (
         key="heat_pump_heating_schedule_mode",
         name="Heat pump heating schedule mode",
         icon="mdi:calendar-clock",
-        value_fn=lambda d, now: hp.active_setpoint_type(_heating_schedule(d), now),
+        value_fn=lambda d, now: hp.get_path(d.heat_pump_raw, "heating.currentBlockSetpoint.setpointType")
+        or hp.active_setpoint_type(_heating_schedule(d), now),
         attrs_fn=_schedule_attrs(_heating_schedule),
+    ),
+    TadoXHeatPumpSensorEntityDescription(
+        key="heat_pump_dhw_heating_activity",
+        name="Heat pump hot water heating activity",
+        icon="mdi:fire",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda d, now: hp.get_path(d.heat_pump_raw, "domesticHotWater.heatingActivityInPercent"),
+    ),
+    TadoXHeatPumpSensorEntityDescription(
+        key="heat_pump_dhw_next_block_start",
+        name="Heat pump hot water next block start",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        value_fn=lambda d, now: dt_util.parse_datetime(
+            hp.get_path(d.heat_pump_raw, "domesticHotWater.nextBlockStartTime") or ""
+        ),
+        attrs_fn=lambda d, now: {
+            "next_setpoint_type": hp.get_path(d.heat_pump_raw, "domesticHotWater.nextBlockSetpoint.setpointType"),
+            "next_setpoint": hp.to_float(
+                hp.get_path(d.heat_pump_raw, "domesticHotWater.nextBlockSetpoint.setpointValue")
+            ),
+        },
+    ),
+    TadoXHeatPumpSensorEntityDescription(
+        key="heat_pump_heating_activity",
+        name="Heat pump heating activity",
+        icon="mdi:fire",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda d, now: hp.get_path(d.heat_pump_raw, "heating.heatingActivityInPercent"),
+    ),
+    TadoXHeatPumpSensorEntityDescription(
+        key="heat_pump_heating_setting_temperature",
+        name="Heat pump heating setting temperature",
+        icon="mdi:thermostat",
+        value_fn=lambda d, now: hp.to_float(hp.get_path(d.heat_pump_raw, "heating.setting.temperature")),
+        attrs_fn=lambda d, now: {
+            "power": hp.get_path(d.heat_pump_raw, "heating.setting.power"),
+            "room_feedback_mode": hp.get_path(d.heat_pump_raw, "heating.roomFeedbackMode"),
+        },
+        **_TEMP,
+    ),
+    TadoXHeatPumpSensorEntityDescription(
+        key="heat_pump_operation_mode",
+        name="Heat pump operation mode",
+        icon="mdi:heat-pump-outline",
+        value_fn=lambda d, now: hp.get_path(d.heat_pump_raw, "spaceOperationMode"),
     ),
     TadoXHeatPumpSensorEntityDescription(
         key="heat_pump_connection",

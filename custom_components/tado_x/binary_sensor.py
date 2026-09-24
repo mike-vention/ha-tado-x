@@ -266,6 +266,7 @@ class TadoXHeatPumpBinarySensorEntityDescription(BinarySensorEntityDescription):
 
     path: str
     on_value: Any = True
+    on_fn: Callable[[Any], bool] | None = None
 
 
 HEAT_PUMP_BINARY_SENSORS: tuple[TadoXHeatPumpBinarySensorEntityDescription, ...] = (
@@ -280,6 +281,50 @@ HEAT_PUMP_BINARY_SENSORS: tuple[TadoXHeatPumpBinarySensorEntityDescription, ...]
         name="Heat pump hot water manual off",
         icon="mdi:water-boiler-off",
         path="domesticHotWater.manualOffActive",
+    ),
+    TadoXHeatPumpBinarySensorEntityDescription(
+        key="heat_pump_dhw_boost_active",
+        name="Heat pump hot water boost active",
+        icon="mdi:rocket-launch",
+        path="domesticHotWater.boostActive",
+    ),
+    TadoXHeatPumpBinarySensorEntityDescription(
+        key="heat_pump_dhw_heating",
+        name="Heat pump hot water heating",
+        device_class=BinarySensorDeviceClass.HEAT,
+        path="domesticHotWater.heatingActivityInPercent",
+        on_fn=lambda v: v > 0,
+    ),
+    TadoXHeatPumpBinarySensorEntityDescription(
+        key="heat_pump_heating",
+        name="Heat pump space heating",
+        device_class=BinarySensorDeviceClass.HEAT,
+        path="heating.heatingActivityInPercent",
+        on_fn=lambda v: v > 0,
+    ),
+    TadoXHeatPumpBinarySensorEntityDescription(
+        key="heat_pump_load_shifting_active",
+        name="Heat pump load shifting active",
+        icon="mdi:transfer",
+        path="heating.loadShiftingActive",
+    ),
+    TadoXHeatPumpBinarySensorEntityDescription(
+        key="heat_pump_standby_active",
+        name="Heat pump standby active",
+        icon="mdi:power-sleep",
+        path="heating.standbyActive",
+    ),
+    TadoXHeatPumpBinarySensorEntityDescription(
+        key="heat_pump_heating_overlay_active",
+        name="Heat pump heating overlay active",
+        icon="mdi:layers",
+        path="heating.overlayActive",
+    ),
+    TadoXHeatPumpBinarySensorEntityDescription(
+        key="heat_pump_room_guided_mode",
+        name="Heat pump room guided mode",
+        icon="mdi:home-thermometer",
+        path="heating.roomGuidedModeActive",
     ),
     TadoXHeatPumpBinarySensorEntityDescription(
         key="heat_pump_connected",
@@ -327,4 +372,8 @@ class TadoXHeatPumpBinarySensor(CoordinatorEntity[TadoXDataUpdateCoordinator], B
     def is_on(self) -> bool | None:
         """Return True if the field equals the 'on' value."""
         value = get_path(self.coordinator.data.heat_pump_raw, self.entity_description.path)
-        return None if value is None else value == self.entity_description.on_value
+        if value is None:
+            return None
+        if self.entity_description.on_fn:
+            return self.entity_description.on_fn(value)
+        return value == self.entity_description.on_value
