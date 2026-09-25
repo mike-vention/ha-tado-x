@@ -468,3 +468,32 @@ async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Reload config entry."""
     await async_unload_entry(hass, entry)
     await async_setup_entry(hass, entry)
+
+
+async def async_remove_config_entry_device(
+    hass: HomeAssistant, entry: ConfigEntry, device_entry: dr.DeviceEntry
+) -> bool:
+    """Allow removing a device only when it no longer exists in the Tado home.
+
+    Covers rooms merged or deleted in the Tado app: their device stays in the
+    registry with unavailable entities, and HA offers no way to remove it
+    unless the integration permits it here.
+    """
+    coordinator: TadoXDataUpdateCoordinator | None = hass.data.get(DOMAIN, {}).get(
+        entry.entry_id
+    )
+    if coordinator is None or coordinator.data is None:
+        return False
+
+    data = coordinator.data
+    home_id = str(coordinator.home_id)
+    active: set[str] = {home_id}
+    active.update(f"{home_id}_{room_id}" for room_id in data.rooms)
+    active.update(data.devices)
+    active.update(device.serial_number for device in data.other_devices)
+    active.update(f"mobile_{device_id}" for device_id in data.mobile_devices)
+
+    return not any(
+        domain == DOMAIN and identifier in active
+        for domain, identifier in device_entry.identifiers
+    )
